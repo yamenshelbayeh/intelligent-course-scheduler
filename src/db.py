@@ -19,13 +19,10 @@ def get_connection():
         password=os.getenv("DB_PASSWORD")
     )
 
-
-def main():
+def get_prerequisite_graph():
     with get_connection() as connection:
-
         with connection.cursor() as cursor:
 
-            # Get every course
             cursor.execute("""
                 SELECT course_code
                 FROM courses
@@ -53,11 +50,33 @@ def main():
 
             prerequisites = cursor.fetchall()
 
-            # Add prerequisites to graph
             for course, prerequisite in prerequisites:
                 graph[course].append(prerequisite)
 
-            print(graph)
+            return graph
+
+def get_course_data():
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""SELECT
+                              course_code,
+                              credits,
+                              difficulty
+                              FROM courses;
+                """)
+
+            courses = cursor.fetchall()
+            course_data = {}
+            for course in courses:
+                course_data[course[0]] = {"credits": course[1], "difficulty": course[2]}
+
+            return course_data
+
+def main():
+    course_data = get_course_data()
+
+    for course, data in course_data.items():
+        print(course, data)
 
 if __name__ == "__main__":
     main()
