@@ -72,11 +72,63 @@ def get_course_data():
 
             return course_data
 
-def main():
-    course_data = get_course_data()
+def get_section_data():
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    c.course_code,
+                    cs.section_id,
+                    cs.section_code,
+                    sm.day_of_week,
+                    sm.start_time,
+                    sm.end_time
+                FROM courses c
+                JOIN course_sections cs
+                    ON cs.course_id = c.course_id
+                JOIN section_meetings sm
+                    ON sm.section_id = cs.section_id
+                ORDER BY
+                    c.course_code,
+                    cs.section_code,
+                    sm.day_of_week;
+            """)
 
-    for course, data in course_data.items():
-        print(course, data)
+            rows = cursor.fetchall()
 
-if __name__ == "__main__":
-    main()
+    section_data = {}
+
+    for row in rows:
+        course_code = row[0]
+        section_id = row[1]
+        section_code = row[2]
+        day_of_week = row[3]
+        start_time = row[4]
+        end_time = row[5]
+
+        # Create the course if we haven't seen it yet
+        if course_code not in section_data:
+            section_data[course_code] = {}
+
+        # Create the section if we haven't seen it yet
+        if section_id not in section_data[course_code]:
+            section_data[course_code][section_id] = {
+                "section_id": section_id,
+                "section_code": section_code,
+                "meetings": []
+            }
+
+        # Add this meeting to the section
+        section_data[course_code][section_id]["meetings"].append({
+            "day_of_week": day_of_week,
+            "start_time": start_time,
+            "end_time": end_time
+        })
+
+    # Convert section dictionaries into lists
+    result = {}
+
+    for course_code, sections in section_data.items():
+        result[course_code] = list(sections.values())
+
+    return result

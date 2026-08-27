@@ -1,3 +1,4 @@
+from datetime import time
 from src.ai.scheduler import (
     is_consistent,
     select_unassigned_course_mrv,
@@ -9,6 +10,7 @@ from src.ai.scheduler import (
     backtrack_mrv,
     backtrack_mrv_degree,
     backtrack_mrv_degree_ac3,
+    meetings_overlap
 )
 
 def test_is_consistent_detects_conflict():
@@ -338,3 +340,49 @@ def test_solver_returns_none_for_unsatisfiable_problem():
 
     assert solution is None
 
+def test_meetings_overlap():
+    meeting1 = {
+        "day_of_week": 1,
+        "start_time": time(9, 0),
+        "end_time": time(10, 30)
+    }
+
+    meeting2 = {
+        "day_of_week": 1,
+        "start_time": time(10, 0),
+        "end_time": time(11, 30)
+    }
+
+    assert meetings_overlap(meeting1, meeting2)
+
+
+def test_meetings_do_not_overlap_different_days():
+    meeting1 = {
+        "day_of_week": 1,
+        "start_time": time(9, 0),
+        "end_time": time(10, 30)
+    }
+
+    meeting2 = {
+        "day_of_week": 2,
+        "start_time": time(9, 0),
+        "end_time": time(10, 30)
+    }
+
+    assert not meetings_overlap(meeting1, meeting2)
+
+
+def test_back_to_back_meetings_do_not_overlap():
+    meeting1 = {
+        "day_of_week": 1,
+        "start_time": time(9, 0),
+        "end_time": time(10, 30)
+    }
+
+    meeting2 = {
+        "day_of_week": 1,
+        "start_time": time(10, 30),
+        "end_time": time(12, 0)
+    }
+
+    assert not meetings_overlap(meeting1, meeting2)

@@ -1,4 +1,5 @@
 import pytest
+from datetime import time
 
 from src.ai.pathfinder import (
     a_star_degree_plan,
@@ -6,8 +7,8 @@ from src.ai.pathfinder import (
     longest_remaining_chain,
     semester_load,
     semester_difficulty,
-)
 
+)
 
 # --------------------------------------------------
 # Shared test data
