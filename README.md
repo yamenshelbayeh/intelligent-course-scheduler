@@ -149,7 +149,7 @@ This was useful to see because reducing the number of expanded states does not a
 
 | Algorithm | Calls | Backtracks |     Avg. Time |
 |---|---:|-----------:|--------------:|
-| Backtracking | 31 |         22 | **0.6492 ms** |
+| Backtracking | 31 |         22 | **0.0692 ms** |
 | MRV | 23 |         14 |     0.2703 ms |
 | MRV + Degree | 11 |          2 |     0.1385 ms |
 | MRV + Degree + AC-3 | **9** |      **1** |     0.3030 ms |
