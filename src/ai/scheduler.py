@@ -1,12 +1,13 @@
 from collections import deque
 
+
 def meetings_overlap(meeting1, meeting2):
     if meeting1["day_of_week"] != meeting2["day_of_week"]:
         return False
 
     return (
-        meeting1["start_time"] < meeting2["end_time"]
-        and meeting2["start_time"] < meeting1["end_time"]
+            meeting1["start_time"] < meeting2["end_time"]
+            and meeting2["start_time"] < meeting1["end_time"]
     )
 
 
@@ -75,10 +76,10 @@ def unassigned_degree(course, assignment, neighbors):
 
 
 def select_unassigned_course_mrv_degree(
-    assignment,
-    courses,
-    domains,
-    neighbors
+        assignment,
+        courses,
+        domains,
+        neighbors
 ):
     min_count = float("inf")
     max_degree = float("-inf")
@@ -173,11 +174,11 @@ def backtrack_mrv(assignment, courses, domains, neighbors, stats):
 
 
 def backtrack_mrv_degree(
-    assignment,
-    courses,
-    domains,
-    neighbors,
-    stats
+        assignment,
+        courses,
+        domains,
+        neighbors,
+        stats
 ):
     stats["calls"] += 1
 
@@ -252,11 +253,11 @@ def ac3(domains, neighbors):
 
 
 def backtrack_mrv_degree_ac3(
-    assignment,
-    courses,
-    domains,
-    neighbors,
-    stats
+        assignment,
+        courses,
+        domains,
+        neighbors,
+        stats
 ):
     stats["calls"] += 1
 
@@ -297,6 +298,7 @@ def backtrack_mrv_degree_ac3(
             stats["backtracks"] += 1
 
     return None
+
 
 def build_neighbors(courses, domains):
     neighbors = {

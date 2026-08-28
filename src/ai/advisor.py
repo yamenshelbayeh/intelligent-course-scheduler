@@ -19,6 +19,7 @@ def get_blocked_courses(graph, completed):
 
     return blocked
 
+
 def get_academic_status(graph, completed):
     eligible = get_eligible_courses(graph, completed)
     blocked = get_blocked_courses(graph, completed)
@@ -28,6 +29,7 @@ def get_academic_status(graph, completed):
         "eligible": sorted(eligible),
         "blocked": blocked
     }
+
 
 def get_course_dependents(graph):
     dependents = {
@@ -39,6 +41,7 @@ def get_course_dependents(graph):
             dependents.setdefault(prerequisite, []).append(course)
 
     return dependents
+
 
 def recommend_eligible_courses(graph, completed, course_data):
     eligible = get_eligible_courses(graph, completed)
@@ -76,6 +79,7 @@ def recommend_eligible_courses(graph, completed, course_data):
 
     return recommendations
 
+
 def explain_recommendation(recommendation):
     if recommendation["unlock_count"] > 0:
         course_names = ", ".join(recommendation["unlocks"])
@@ -111,6 +115,7 @@ def explain_recommendation(recommendation):
         f"Its difficulty is {recommendation['difficulty']}/5."
     )
 
+
 def explain_blocked_course(course, graph, completed):
     if course not in graph:
         return f"{course} was not found in the course catalog."
@@ -134,6 +139,7 @@ def explain_blocked_course(course, graph, completed):
         f"{', '.join(missing)}."
     )
 
+
 def get_future_unlocks(course, graph, completed):
     dependents = get_course_dependents(graph)
 
@@ -156,6 +162,7 @@ def get_future_unlocks(course, graph, completed):
 
     return sorted(future_unlocks)
 
+
 def get_prerequisite_chain(course, graph, completed):
     visited = set()
     prereq_chain = set()
@@ -177,9 +184,10 @@ def get_prerequisite_chain(course, graph, completed):
 
     return sorted(prereq_chain)
 
+
 def build_advisor_report(graph, completed, course_data):
     report = []
-    status = get_academic_status(graph,completed)
+    status = get_academic_status(graph, completed)
 
     recommendations = recommend_eligible_courses(graph, completed, course_data)
 
@@ -205,6 +213,7 @@ def build_advisor_report(graph, completed, course_data):
         "recommendations": recommendation_details,
         "blocked": blocked_details
     }
+
 
 def get_next_semester_advice(degree_plan, advisor_report):
     if not degree_plan:

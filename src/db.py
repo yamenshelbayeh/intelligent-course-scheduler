@@ -4,7 +4,6 @@ from pathlib import Path
 import psycopg
 from dotenv import load_dotenv
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / ".env")
@@ -19,15 +18,16 @@ def get_connection():
         password=os.getenv("DB_PASSWORD")
     )
 
+
 def get_prerequisite_graph():
     with get_connection() as connection:
         with connection.cursor() as cursor:
 
             cursor.execute("""
-                SELECT course_code
-                FROM courses
-                ORDER BY course_code;
-            """)
+                           SELECT course_code
+                           FROM courses
+                           ORDER BY course_code;
+                           """)
 
             courses = cursor.fetchall()
 
@@ -37,16 +37,15 @@ def get_prerequisite_graph():
                 graph[course[0]] = []
 
             cursor.execute("""
-                SELECT
-                    c.course_code,
-                    p_course.course_code
-                FROM prerequisites p
-                JOIN courses c
-                    ON c.course_id = p.course_id
-                JOIN courses p_course
-                    ON p_course.course_id = p.prerequisite_id
-                ORDER BY c.course_code;
-            """)
+                           SELECT c.course_code,
+                                  p_course.course_code
+                           FROM prerequisites p
+                                    JOIN courses c
+                                         ON c.course_id = p.course_id
+                                    JOIN courses p_course
+                                         ON p_course.course_id = p.prerequisite_id
+                           ORDER BY c.course_code;
+                           """)
 
             prerequisites = cursor.fetchall()
 
@@ -55,15 +54,15 @@ def get_prerequisite_graph():
 
             return graph
 
+
 def get_course_data():
     with get_connection() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("""SELECT
-                              course_code,
-                              credits,
-                              difficulty
+            cursor.execute("""SELECT course_code,
+                                     credits,
+                                     difficulty
                               FROM courses;
-                """)
+                           """)
 
             courses = cursor.fetchall()
             course_data = {}
@@ -72,27 +71,26 @@ def get_course_data():
 
             return course_data
 
+
 def get_section_data():
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute("""
-                SELECT
-                    c.course_code,
-                    cs.section_id,
-                    cs.section_code,
-                    sm.day_of_week,
-                    sm.start_time,
-                    sm.end_time
-                FROM courses c
-                JOIN course_sections cs
-                    ON cs.course_id = c.course_id
-                JOIN section_meetings sm
-                    ON sm.section_id = cs.section_id
-                ORDER BY
-                    c.course_code,
-                    cs.section_code,
-                    sm.day_of_week;
-            """)
+                           SELECT c.course_code,
+                                  cs.section_id,
+                                  cs.section_code,
+                                  sm.day_of_week,
+                                  sm.start_time,
+                                  sm.end_time
+                           FROM courses c
+                                    JOIN course_sections cs
+                                         ON cs.course_id = c.course_id
+                                    JOIN section_meetings sm
+                                         ON sm.section_id = cs.section_id
+                           ORDER BY c.course_code,
+                                    cs.section_code,
+                                    sm.day_of_week;
+                           """)
 
             rows = cursor.fetchall()
 

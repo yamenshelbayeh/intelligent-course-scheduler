@@ -11,6 +11,7 @@ def semester_load(action, course_data):
         total_credits += course_data[course]["credits"]
     return total_credits
 
+
 def semester_difficulty(action, course_data):
     total_difficulty = 0
 
@@ -19,8 +20,10 @@ def semester_difficulty(action, course_data):
 
     return total_difficulty
 
+
 def is_goal(state, graph):
     return frozenset(graph.keys()).issubset(state)
+
 
 def longest_remaining_chain(state, graph):
     memo = {}
@@ -62,6 +65,7 @@ def longest_remaining_chain(state, graph):
         for course in remaining_courses
     )
 
+
 def heuristic(state, graph, course_data, max_credits):
     remaining_credits = 0
 
@@ -74,8 +78,10 @@ def heuristic(state, graph, course_data, max_credits):
 
     return max(credit_semesters, prerequisite_semesters)
 
+
 def zero_heuristic(state, graph, course_data, max_credits):
     return 0
+
 
 def get_actions(state, graph, course_data, max_credits, max_difficulty):
     eligible_courses = get_eligible_courses(graph, state)
@@ -92,12 +98,14 @@ def get_actions(state, graph, course_data, max_credits, max_difficulty):
 
             if (total_credits <= max_credits
                     and total_difficulty <= max_difficulty):
-                 actions.append(semester)
+                actions.append(semester)
 
     return actions
 
+
 def transition(state, action):
     return state | frozenset(action)
+
 
 def a_star_degree_plan(graph, completed, course_data, max_credits, max_difficulty, heuristic_fn=heuristic):
     if not completed:
@@ -121,7 +129,7 @@ def a_star_degree_plan(graph, completed, course_data, max_credits, max_difficult
         )
     )
     best_cost = {
-        start_state: (0,0)
+        start_state: (0, 0)
     }
 
     expanded_states = 0
@@ -157,7 +165,7 @@ def a_star_degree_plan(graph, completed, course_data, max_credits, max_difficult
             new_state = transition(state, action)
             semester_penalty = semester_difficulty(action, course_data) ** 2
             new_balance_cost = balance + semester_penalty
-            new_g = g+1
+            new_g = g + 1
             new_cost = (new_g, new_balance_cost)
             if new_state not in best_cost or new_cost < best_cost[new_state]:
                 best_cost[new_state] = new_cost
@@ -166,7 +174,9 @@ def a_star_degree_plan(graph, completed, course_data, max_credits, max_difficult
                 new_f = new_h + new_g
 
                 new_path = path + [action]
-                heapq.heappush(frontier, (new_f, new_g, new_balance_cost, -semester_load(action, course_data), next(tie_breaker), new_state, new_path))
+                heapq.heappush(frontier,
+                               (new_f, new_g, new_balance_cost, -semester_load(action, course_data), next(tie_breaker),
+                                new_state, new_path))
 
     if best_goal_path is not None:
         return best_goal_path, expanded_states

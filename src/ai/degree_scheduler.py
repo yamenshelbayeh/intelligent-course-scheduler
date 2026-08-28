@@ -5,8 +5,8 @@ def generate_degree_timetables(degree_plan, section_data):
     timetables = []
 
     for semester_number, semester_courses in enumerate(
-        degree_plan,
-        start=1
+            degree_plan,
+            start=1
     ):
         solution, stats, neighbors = generate_timetable(
             section_data,

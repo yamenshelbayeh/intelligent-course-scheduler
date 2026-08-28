@@ -55,6 +55,7 @@ def topological_sort(graph):
 
     return order
 
+
 def get_eligible_courses(graph, completed):
     eligible = []
 
@@ -64,26 +65,3 @@ def get_eligible_courses(graph, completed):
                 eligible.append(course)
 
     return eligible
-
-
-
-def main():
-    graph = get_prerequisite_graph()
-
-    print("Graph:")
-    print(graph)
-
-    print("\nCycle detected:", has_cycle(graph))
-
-    order = topological_sort(graph)
-
-    print("\nTopological order:")
-    for course in order:
-        print(course)
-
-    
-
-
-
-if __name__ == "__main__":
-    main()
