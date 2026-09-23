@@ -1,44 +1,38 @@
-import pandas as pd
-import streamlit as st
-import requests
+from pathlib import Path
+import sys
 
-API_URL = "http://127.0.0.1:8000"
-DAY_NAMES = {
-    1: "Monday",
-    2: "Tuesday",
-    3: "Wednesday",
-    4: "Thursday",
-    5: "Friday",
-    6: "Saturday",
-    7: "Sunday",
-}
-COURSES = [
-    "CSE101",
-    "CSE102",
-    "CSE201",
-    "CSE202",
-    "CSE301",
-    "CSE302",
-    "CSE303",
-    "MATH101",
-    "MATH201",
-    "STAT201",
-]
+import streamlit as st
+
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+
+from src.db import load_curriculum
+
+from src.ai.advisor import build_advisor_report
+
+from src.ai.pathfinder import (
+    a_star_degree_plan,
+    validate_plan,
+    course_available_in_semester,
+    differentiated_credits
+)
+
 
 st.set_page_config(
-    page_title="Intelligent Course Scheduler",
+    page_title="Intelligent Degree Planner",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
+
 st.markdown(
     """
     <style>
-
-    /* =========================
-       PAGE
-       ========================= */
 
     .block-container {
         max-width: 1200px;
@@ -46,15 +40,9 @@ st.markdown(
         padding-bottom: 5rem;
     }
 
-    /* Reduce default Streamlit top space */
     [data-testid="stMainBlockContainer"] {
         padding-top: 2rem;
     }
-
-
-    /* =========================
-       TYPOGRAPHY
-       ========================= */
 
     h1 {
         font-size: 3rem !important;
@@ -80,25 +68,9 @@ st.markdown(
         line-height: 1.6;
     }
 
-
-    /* =========================
-       INPUTS
-       ========================= */
-
-    [data-testid="stMultiSelect"],
-    [data-testid="stNumberInput"],
-    [data-testid="stSlider"] {
-        margin-bottom: 0.4rem;
-    }
-
     label {
         font-weight: 600 !important;
     }
-
-
-    /* =========================
-       GENERATE BUTTON
-       ========================= */
 
     .stButton > button {
         width: 100%;
@@ -117,60 +89,19 @@ st.markdown(
         box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
     }
 
-
-    /* =========================
-       METRIC CARDS
-       ========================= */
-
     [data-testid="stMetric"] {
         background: var(--secondary-background-color);
         border: 1px solid rgba(150, 150, 150, 0.18);
         border-radius: 16px;
         padding: 1.2rem 1.25rem;
         min-height: 120px;
-        transition:
-            transform 0.15s ease,
-            box-shadow 0.15s ease;
     }
-
-    [data-testid="stMetric"]:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-    }
-
-    [data-testid="stMetricLabel"] {
-        font-size: 0.9rem;
-        font-weight: 600;
-        opacity: 0.75;
-    }
-
-    [data-testid="stMetricValue"] {
-        font-size: 2rem;
-        font-weight: 800;
-    }
-
-
-    /* =========================
-       BORDERED CARDS
-       ========================= */
 
     [data-testid="stVerticalBlockBorderWrapper"] {
         background: var(--secondary-background-color);
         border-radius: 16px !important;
         border-color: rgba(150, 150, 150, 0.18) !important;
-        transition:
-            transform 0.15s ease,
-            box-shadow 0.15s ease;
     }
-
-    [data-testid="stVerticalBlockBorderWrapper"]:hover {
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
-    }
-
-
-    /* =========================
-       EXPANDERS
-       ========================= */
 
     [data-testid="stExpander"] {
         background: var(--secondary-background-color);
@@ -180,21 +111,6 @@ st.markdown(
         overflow: hidden;
     }
 
-    [data-testid="stExpander"] summary {
-        font-weight: 650;
-        padding-top: 0.15rem;
-        padding-bottom: 0.15rem;
-    }
-
-    [data-testid="stExpander"] summary:hover {
-        opacity: 0.85;
-    }
-
-
-    /* =========================
-       TABLES
-       ========================= */
-
     [data-testid="stDataFrame"] {
         margin-top: 0.8rem;
         margin-bottom: 1rem;
@@ -203,39 +119,15 @@ st.markdown(
         overflow: hidden;
     }
 
-
-    /* =========================
-       STATUS MESSAGES
-       ========================= */
-
     [data-testid="stAlert"] {
         border-radius: 12px;
     }
-
-
-    /* =========================
-       DIVIDERS
-       ========================= */
 
     hr {
         margin-top: 2.2rem !important;
         margin-bottom: 2.2rem !important;
         opacity: 0.15;
     }
-
-
-    /* =========================
-       CAPTIONS
-       ========================= */
-
-    [data-testid="stCaptionContainer"] {
-        opacity: 0.72;
-    }
-
-
-    /* =========================
-       MOBILE
-       ========================= */
 
     @media (max-width: 768px) {
 
@@ -251,7 +143,6 @@ st.markdown(
         h2 {
             font-size: 1.4rem !important;
         }
-
     }
 
     </style>
@@ -259,331 +150,743 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
+@st.cache_data
+def get_curriculum():
+    return load_curriculum()
+
+
+try:
+    curriculum = get_curriculum()
+
+except Exception as error:
+
+    st.error(
+        "Could not load the curriculum from PostgreSQL."
+    )
+
+    st.code(str(error))
+
+    st.stop()
+
+
+course_data = curriculum["courses"]
+prerequisites = curriculum["prerequisites"]
+degree_requirements = curriculum["degree_requirements"]
+course_rules = curriculum["course_rules"]
+
+
+def course_label(code):
+
+    data = course_data[code]
+
+    return (
+        f"{code} — {data['name']} "
+        f"({data['credits']} credits)"
+    )
+
+
+def completed_credit_total(completed):
+
+    return sum(
+        course_data[code]["credits"]
+        for code in completed
+        if code in course_data
+    )
+
+
+course_codes = sorted(
+    course_data,
+    key=lambda code: (
+        course_data[code]["recommended_semester"]
+        if course_data[code]["recommended_semester"] is not None
+        else 99,
+        code
+    )
+)
+
+
 st.markdown(
     """
-    <h1>🎓 Intelligent Course Scheduler</h1>
+    <h1>🎓 Intelligent Degree Planner</h1>
 
     <p style="
         font-size: 1.15rem;
         opacity: 0.68;
-        max-width: 760px;
+        max-width: 800px;
         margin-top: 0;
         margin-bottom: 2.2rem;
     ">
-        AI-powered degree planning, academic advising,
-        and conflict-free timetable generation using
-        graph search, constraint satisfaction, and PostgreSQL.
+        AI-powered degree pathway planning for the
+        University of Debrecen Computer Science Engineering BSc.
+        The system uses A* search, curriculum constraints,
+        prerequisite reasoning and PostgreSQL.
     </p>
     """,
     unsafe_allow_html=True
 )
 
+
 completed = st.multiselect(
     "Completed courses",
-    COURSES
+    options=course_codes,
+    format_func=course_label,
+    help=(
+        "Select courses already completed. "
+        "They will not appear again in the generated plan."
+    )
 )
+
 
 input_col1, input_col2 = st.columns(2)
 
+
 with input_col1:
-    max_credits = st.slider(
-        "Maximum credits per semester",
-        min_value=5,
-        max_value=30,
-        value=15,
-        step=5
+
+    start_semester = st.selectbox(
+        "Next curriculum semester",
+        options=list(range(1, 8)),
+        index=0,
+        help=(
+            "Semester 1 means planning from the beginning "
+            "of the degree."
+        )
     )
+
 
 with input_col2:
-    max_difficulty = st.number_input(
-        "Maximum semester difficulty",
+
+    max_credits = st.number_input(
+        "Planning credit cap per semester",
         min_value=1,
-        value=10,
-        step=1
+        value=30,
+        step=1,
+        help=(
+            "Choose the maximum number of credits the planner "
+            "should place in one semester. Values above 30 are allowed."
+        )
     )
 
-if st.button(
-        "Generate Plan",
-        type="primary",
-        use_container_width=True
-):
-    payload = {
-        "completed": completed,
-        "max_credits": max_credits,
-        "max_difficulty": max_difficulty,
-    }
 
-    try:
-        response = requests.post(
-            f"{API_URL}/full-plan",
-            json=payload,
-            timeout=30
+generate = st.button(
+    "Generate AI Degree Plan",
+    type="primary",
+    use_container_width=True
+)
+
+
+# ============================================================
+# GENERATE PLAN
+# ============================================================
+
+if generate:
+
+    completed_snapshot = list(completed)
+
+    with st.spinner(
+        "Searching for a valid degree pathway..."
+    ):
+
+        plan, expanded_states, initial_h = (
+            a_star_degree_plan(
+                prerequisite_groups=prerequisites,
+                course_data=course_data,
+                course_rules=course_rules,
+                degree_requirements=degree_requirements,
+                completed=set(completed_snapshot),
+                start_semester=start_semester,
+                max_credits=max_credits
+            )
         )
 
-        if response.status_code == 200:
 
-            data = response.json()
+        if plan is None:
 
-            advisor = data["advisor"]
-            degree_plan = data["degree_plan"]
-            degree_timetables = data["degree_timetables"]
-            degree_plan_details = data["degree_plan_details"]
-
-            st.success("Plan generated successfully!")
-
-            completed_col, semesters_col, states_col, recommendation_col = st.columns(4)
-
-            completed_col.metric(
-                "Completed Courses",
-                len(advisor["completed"])
+            st.error(
+                "No valid degree plan could be generated "
+                "with these settings."
             )
 
-            semesters_col.metric(
-                "Remaining Semesters",
-                len(degree_plan)
+            st.stop()
+
+
+        valid, validation_errors = validate_plan(
+            plan=plan,
+            prerequisite_groups=prerequisites,
+            course_data=course_data,
+            course_rules=course_rules,
+            degree_requirements=degree_requirements,
+            completed=set(completed_snapshot),
+            start_semester=start_semester,
+            max_credits=max_credits
+        )
+
+
+        advisor = build_advisor_report(
+            prerequisites,
+            set(completed_snapshot),
+            course_data,
+            course_rules
+        )
+
+
+        planned_courses = {
+            code
+            for semester in plan
+            for code in semester
+        }
+
+
+        planned_credits = sum(
+            course_data[code]["credits"]
+            for code in planned_courses
+        )
+
+
+        final_state = (
+            set(completed_snapshot)
+            | planned_courses
+        )
+
+
+        final_differentiated_credits = (
+            differentiated_credits(
+                final_state,
+                course_data
             )
+        )
 
-            states_col.metric(
-                "A* Expanded States",
-                data["expanded_states"]
+
+        current_recommendations = [
+            recommendation
+            for recommendation
+            in advisor["recommendations"]
+            if course_available_in_semester(
+                recommendation["course"],
+                course_data,
+                start_semester
             )
+        ]
 
-            top_recommendation = (
-                advisor["recommendations"][0]["course"]
-                if advisor["recommendations"]
-                else "None"
-            )
 
-            recommendation_col.metric(
-                "Top Recommendation",
-                top_recommendation
-            )
+        st.session_state["planner_result"] = {
+            "plan": plan,
+            "expanded_states": expanded_states,
+            "initial_h": initial_h,
+            "valid": valid,
+            "validation_errors": validation_errors,
+            "advisor": advisor,
+            "current_recommendations":
+                current_recommendations,
+            "planned_credits": planned_credits,
+            "completed": completed_snapshot,
+            "completed_credits":
+                completed_credit_total(
+                    completed_snapshot
+                ),
+            "final_differentiated_credits":
+                final_differentiated_credits,
+            "start_semester": start_semester,
+            "max_credits": max_credits
+        }
 
-            st.divider()
 
-            st.subheader("Recommended Courses")
+# ============================================================
+# RESULTS
+# ============================================================
 
-            if advisor["recommendations"]:
-                for rank, recommendation in enumerate(
-                        advisor["recommendations"],
-                        start=1
-                ):
-                    with st.container(border=True):
+if "planner_result" in st.session_state:
 
-                        title_col, difficulty_col = st.columns([4, 1])
+    result = st.session_state["planner_result"]
 
-                        with title_col:
-                            if rank == 1:
-                                st.markdown(
-                                    f"### ⭐ {rank}. {recommendation['course']}"
-                                )
-                                st.caption("Top recommendation")
-                            else:
-                                st.markdown(
-                                    f"### {rank}. {recommendation['course']}"
-                                )
+    plan = result["plan"]
+    advisor = result["advisor"]
 
-                            st.caption(
-                                f"{recommendation['credits']} credits"
-                            )
+    current_recommendations = result[
+        "current_recommendations"
+    ]
 
-                        with difficulty_col:
-                            st.metric(
-                                "Difficulty",
-                                f"{recommendation['difficulty']}/5"
-                            )
+    start_semester = result["start_semester"]
+    max_credits = result["max_credits"]
 
-                        direct_unlocks = (
-                            ", ".join(recommendation["unlocks"])
-                            if recommendation["unlocks"]
-                            else "None"
-                        )
+    generated_completed = result["completed"]
 
-                        future_unlocks = (
-                            ", ".join(recommendation["future_unlocks"])
-                            if recommendation["future_unlocks"]
-                            else "None"
-                        )
 
-                        unlock_col1, unlock_col2 = st.columns(2)
+    st.success(
+        "Valid degree plan generated successfully."
+    )
 
-                        with unlock_col1:
-                            st.markdown("**Direct Unlocks**")
-                            st.write(direct_unlocks)
 
-                        with unlock_col2:
-                            st.markdown("**Future Impact**")
-                            st.write(future_unlocks)
+    # ========================================================
+    # MAIN METRICS
+    # ========================================================
 
-                        with st.expander("Why is this recommended?"):
-                            st.write(
-                                recommendation["explanation"]
-                            )
+    metric1, metric2, metric3, metric4 = (
+        st.columns(4)
+    )
 
-            else:
-                st.info("No remaining course recommendations.")
 
-            st.divider()
+    metric1.metric(
+        "Completed Courses",
+        len(generated_completed)
+    )
 
-            st.subheader("Blocked Courses")
 
-            if advisor["blocked"]:
-                for course in sorted(advisor["blocked"]):
-                    details = advisor["blocked"][course]
+    metric2.metric(
+        "Remaining Semesters",
+        len(plan)
+    )
 
-                    missing_prereqs = sorted(
-                        details["missing_prerequisites"]
-                    )
 
-                    prerequisite_chain = sorted(
-                        details["prerequisite_chain"]
-                    )
+    metric3.metric(
+        "Credits Planned",
+        result["planned_credits"]
+    )
 
-                    blocked_label = (
-                        f"🔒 {course} — "
-                        f"{len(missing_prereqs)} prerequisite(s) missing"
-                    )
 
-                    with st.expander(blocked_label):
-                        col1, col2 = st.columns(2)
+    metric4.metric(
+        "A* Expanded States",
+        result["expanded_states"]
+    )
 
-                        with col1:
-                            st.markdown("**Missing Direct Prerequisites**")
 
-                            if missing_prereqs:
-                                for prerequisite in missing_prereqs:
-                                    st.write(f"• {prerequisite}")
-                            else:
-                                st.write("None")
+    st.caption(
+        f"{len(course_data)} curriculum courses "
+        "loaded from PostgreSQL."
+    )
 
-                        with col2:
-                            st.markdown("**Remaining Prerequisite Chain**")
 
-                            if prerequisite_chain:
-                                for prerequisite in prerequisite_chain:
-                                    st.write(f"• {prerequisite}")
-                            else:
-                                st.write("None")
+    st.divider()
 
-                        st.divider()
 
-                        st.markdown("**Advisor Explanation**")
-                        st.write(details["explanation"])
+    # ========================================================
+    # ACADEMIC ADVISOR
+    # ========================================================
 
-            else:
-                st.success("No blocked courses.")
+    st.subheader("🧭 Academic Advisor")
 
-            st.divider()
+    st.write(
+        f"Courses below are currently eligible by "
+        f"prerequisites and available in Semester "
+        f"{start_semester}."
+    )
 
-            st.subheader("Degree Plan")
-            if degree_plan_details:
-                for semester in degree_plan_details:
-                    with st.container(border=True):
+
+    if current_recommendations:
+
+        for rank, recommendation in enumerate(
+            current_recommendations[:5],
+            start=1
+        ):
+
+            with st.container(border=True):
+
+                title_col, credits_col = (
+                    st.columns([4, 1])
+                )
+
+
+                with title_col:
+
+                    if rank == 1:
+
                         st.markdown(
-                            f"### Semester {semester['semester']}"
+                            f"### ⭐ "
+                            f"{recommendation['course']} "
+                            f"— {recommendation['name']}"
+                        )
+
+                        st.caption(
+                            "Top prerequisite-impact "
+                            "recommendation"
+                        )
+
+                    else:
+
+                        st.markdown(
+                            f"### "
+                            f"{recommendation['course']} "
+                            f"— {recommendation['name']}"
+                        )
+
+
+                    st.caption(
+                        recommendation["category"]
+                        .replace("_", " ")
+                        .title()
+                    )
+
+
+                with credits_col:
+
+                    st.metric(
+                        "Credits",
+                        recommendation["credits"]
+                    )
+
+
+                unlock_col1, unlock_col2 = (
+                    st.columns(2)
+                )
+
+
+                with unlock_col1:
+
+                    st.markdown(
+                        "**Direct Unlocks**"
+                    )
+
+
+                    if recommendation["unlocks"]:
+
+                        for code in recommendation[
+                            "unlocks"
+                        ]:
+
+                            st.write(
+                                f"• {code} — "
+                                f"{course_data[code]['name']}"
+                            )
+
+                    else:
+
+                        st.write("None")
+
+
+                with unlock_col2:
+
+                    st.markdown(
+                        "**Downstream Courses**"
+                    )
+
+                    st.write(
+                        f"{recommendation['future_unlock_count']} "
+                        "unfinished course(s) depend "
+                        "on this prerequisite path."
+                    )
+
+
+                with st.expander(
+                    "Why is this recommended?"
+                ):
+
+                    st.write(
+                        recommendation[
+                            "explanation"
+                        ]
+                    )
+
+
+    else:
+
+        st.info(
+            "No advisor recommendations are "
+            "available for this semester."
+        )
+
+
+    st.divider()
+
+
+    # ========================================================
+    # DEGREE PLAN
+    # ========================================================
+
+    st.subheader(
+        "🗺️ AI-Generated Degree Plan"
+    )
+
+
+    for offset, semester_courses in enumerate(
+        plan
+    ):
+
+        semester_number = (
+            start_semester + offset
+        )
+
+
+        semester_credits = sum(
+            course_data[code]["credits"]
+            for code in semester_courses
+        )
+
+
+        with st.expander(
+            (
+                f"Semester {semester_number} "
+                f"— {semester_credits} credits"
+            ),
+            expanded=(offset == 0)
+        ):
+
+
+            if not semester_courses:
+
+                st.info(
+                    "No curriculum courses planned "
+                    "for this semester."
+                )
+
+                continue
+
+
+            rows = []
+
+
+            for code in semester_courses:
+
+                info = course_data[code]
+
+                rows.append({
+                    "Code": code,
+                    "Course": info["name"],
+                    "Credits": info["credits"],
+                    "Category": (
+                        info["category"]
+                        .replace("_", " ")
+                        .title()
+                    )
+                })
+
+
+            st.dataframe(
+                rows,
+                use_container_width=True,
+                hide_index=True
+            )
+
+
+    st.divider()
+
+
+    # ========================================================
+    # DEGREE PROGRESS
+    # ========================================================
+
+    st.subheader("📊 Degree Progress")
+
+
+    progress1, progress2, progress3, progress4 = (
+        st.columns(4)
+    )
+
+
+    progress1.metric(
+        "Already Completed",
+        f"{result['completed_credits']} credits"
+    )
+
+
+    progress2.metric(
+        "Remaining Plan",
+        f"{result['planned_credits']} credits"
+    )
+
+
+    progress3.metric(
+        "Differentiated Block",
+        (
+            f"{result['final_differentiated_credits']}"
+            " / 30 credits"
+        )
+    )
+
+
+    progress4.metric(
+        "Free Choice",
+        "12 credits"
+    )
+
+
+    st.caption(
+        "The curriculum defines 12 free-choice credits "
+        "without prescribing fixed courses. "
+        "They are therefore reported separately "
+        "instead of being selected automatically."
+    )
+
+
+    st.divider()
+
+
+    # ========================================================
+    # BLOCKED COURSE EXPLAINER
+    # ========================================================
+
+    st.subheader(
+        "🔒 Why Is a Course Blocked?"
+    )
+
+
+    blocked = advisor["blocked"]
+
+
+    if blocked:
+
+        blocked_course = st.selectbox(
+            "Select a blocked course",
+            options=sorted(blocked),
+            format_func=course_label
+        )
+
+
+        details = blocked[blocked_course]
+
+
+        with st.container(border=True):
+
+            st.markdown(
+                f"### {course_label(blocked_course)}"
+            )
+
+
+            missing_groups = details[
+                "missing_prerequisite_groups"
+            ]
+
+
+            if missing_groups:
+
+                st.markdown(
+                    "**Missing prerequisite requirements**"
+                )
+
+
+                for group in missing_groups:
+
+                    if len(group) == 1:
+
+                        code = group[0]
+
+                        st.write(
+                            f"• {course_label(code)}"
+                        )
+
+                    else:
+
+                        options = " OR ".join(
+                            course_label(code)
+                            for code in group
                         )
 
                         st.write(
-                            " • ".join(semester["courses"])
+                            f"• One of: {options}"
                         )
 
-                        credits_col, difficulty_col = st.columns(2)
 
-                        credits_col.metric(
-                            "Credits",
-                            semester["total_credits"]
-                        )
-
-                        difficulty_col.metric(
-                            "Difficulty Load",
-                            f"{semester['total_difficulty']} / {max_difficulty}"
-                        )
-            else:
-                st.success("Degree requirements completed.")
-
-            st.divider()
-
-            st.subheader("Semester Timetables")
-            if degree_timetables:
-                for semester in degree_timetables:
-                    semester_number = semester["semester"]
-                    timetable = semester["timetable"]
-                    stats = semester["stats"]
-
-                    semester_courses = ", ".join(
-                        semester["courses"]
-                    )
-
-                    with st.expander(
-                            f"📅 Semester {semester_number} — {semester_courses}"
-                    ):
-                        rows = []
-
-                        for course, section in timetable.items():
-                            for meeting in section["meetings"]:
-                                rows.append({
-                                    "Course": course,
-                                    "Section": section["section_code"],
-                                    "Day": DAY_NAMES[meeting["day_of_week"]],
-                                    "Start": meeting["start_time"],
-                                    "End": meeting["end_time"],
-                                })
-
-                        df = pd.DataFrame(rows)
-
-                        st.dataframe(
-                            df,
-                            use_container_width=True,
-                            hide_index=True
-                        )
-
-                        stat_col1, stat_col2 = st.columns(2)
-
-                        stat_col1.metric(
-                            "CSP Calls",
-                            stats["calls"]
-                        )
-
-                        stat_col2.metric(
-                            "Backtracks",
-                            stats["backtracks"]
-                        )
-
-            else:
-                st.info("No remaining semester timetables.")
-
-            st.divider()
-
-            st.subheader("Search Statistics")
-            search_col1, search_col2 = st.columns(2)
-
-            search_col1.metric(
-                "A* Expanded States",
-                data["expanded_states"]
-            )
-
-            search_col2.metric(
-                "Planned Semesters",
-                len(degree_plan)
+            minimum_credits = details.get(
+                "minimum_completed_credits"
             )
 
 
+            if minimum_credits is not None:
 
-
-
-        else:
-            try:
-                error = response.json()
-                message = error.get(
-                    "detail",
-                    "Something went wrong while generating the plan."
+                st.write(
+                    f"• Requires at least "
+                    f"{minimum_credits} "
+                    "completed credits."
                 )
-            except ValueError:
-                message = "The server returned an unexpected response."
 
-            st.error(message)
 
-    except requests.RequestException as error:
-        st.error(
-            "Could not connect to the FastAPI server."
+            if details["prerequisite_chain"]:
+
+                with st.expander(
+                    "Remaining prerequisite chain"
+                ):
+
+                    for code in details[
+                        "prerequisite_chain"
+                    ]:
+
+                        st.write(
+                            f"• {course_label(code)}"
+                        )
+
+
+            st.markdown(
+                "**Advisor explanation**"
+            )
+
+            st.write(
+                details["explanation"]
+            )
+
+
+    else:
+
+        st.success(
+            "There are currently no blocked courses."
         )
+
+
+    st.divider()
+
+
+    # ========================================================
+    # AI SEARCH STATISTICS
+    # ========================================================
+
+    st.subheader(
+        "🧠 AI Search Statistics"
+    )
+
+
+    search1, search2, search3 = (
+        st.columns(3)
+    )
+
+
+    search1.metric(
+        "Initial Heuristic",
+        result["initial_h"]
+    )
+
+
+    search2.metric(
+        "Expanded States",
+        result["expanded_states"]
+    )
+
+
+    search3.metric(
+        "Plan Validation",
+        (
+            "Passed"
+            if result["valid"]
+            else "Failed"
+        )
+    )
+
+
+    st.caption(
+        "A* searches curriculum states where each "
+        "state represents the set of courses already "
+        "completed. The heuristic estimates a lower "
+        "bound on the number of semesters required "
+        "from the remaining structured credits."
+    )
+
+
+    if result["valid"]:
+
+        st.success(
+            "The generated plan satisfies the encoded "
+            "prerequisites, special course rules, "
+            "semester availability and the selected "
+            "semester credit limit."
+        )
+
+    else:
+
+        st.error(
+            "The generated plan failed validation."
+        )
+
+        for error in result[
+            "validation_errors"
+        ]:
+
+            st.write(
+                f"• {error}"
+            )

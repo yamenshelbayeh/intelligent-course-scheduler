@@ -1,40 +1,43 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from src.ai.degree_scheduler import generate_degree_timetables
-from src.ai.scheduler import generate_timetable
-from src.db import (
-    get_prerequisite_graph,
-    get_course_data,
-    get_section_data
+from src.db import load_curriculum
+
+from src.ai.pathfinder import (
+    a_star_degree_plan,
+    validate_plan,
+    differentiated_credits
 )
-from src.ai.advisor import build_advisor_report
-from src.ai.pathfinder import a_star_degree_plan
-
-app = FastAPI()
 
 
-class AdvisorRequest(BaseModel):
-    completed: list[str]
+app = FastAPI(
+    title="Intelligent Course Scheduler API",
+    description=(
+        "AI-based degree planner for the University of Debrecen "
+        "Computer Science Engineering BSc curriculum."
+    ),
+    version="2.0"
+)
 
 
 class DegreePlanRequest(BaseModel):
-    completed: list[str]
-    max_credits: int = Field(default=15, ge=1, le=30)
-    max_difficulty: int = Field(default=10, ge=1)
+    completed: list[str] = Field(default_factory=list)
 
+    max_credits: int = Field(
+        default=30,
+        ge=1,
+        le=30
+    )
 
-class TimetableRequest(BaseModel):
-    courses: list[str]
-
-
-class FullPlanRequest(BaseModel):
-    completed: list[str]
-    max_credits: int = Field(default=15, ge=1, le=30)
-    max_difficulty: int = Field(default=10, ge=1)
+    start_semester: int = Field(
+        default=1,
+        ge=1,
+        le=7
+    )
 
 
 def validate_courses(courses, valid_courses):
+
     invalid_courses = [
         course
         for course in courses
@@ -44,162 +47,156 @@ def validate_courses(courses, valid_courses):
     if invalid_courses:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown courses: {', '.join(invalid_courses)}"
+            detail=(
+                "Unknown courses: "
+                + ", ".join(invalid_courses)
+            )
         )
 
 
 @app.get("/")
 def home():
     return {
-        "message": "Course Scheduler API is running"
+        "message": "Intelligent Course Scheduler API is running",
+        "curriculum": "University of Debrecen - Computer Science Engineering BSc"
     }
 
 
-@app.post("/advisor")
-def advisor(data: AdvisorRequest):
-    graph = get_prerequisite_graph()
-    course_data = get_course_data()
+@app.get("/curriculum")
+def curriculum():
 
-    completed = set(data.completed)
+    data = load_curriculum()
 
-    validate_courses(completed, graph)
+    course_data = data["courses"]
+    degree_requirements = data["degree_requirements"]
 
-    return build_advisor_report(
-        graph,
-        completed,
-        course_data
-    )
+    return {
+        "course_count": len(course_data),
+        "courses": course_data,
+        "degree_requirements": degree_requirements
+    }
 
 
 @app.post("/degree-plan")
 def degree_plan(data: DegreePlanRequest):
-    graph = get_prerequisite_graph()
-    course_data = get_course_data()
+
+    curriculum = load_curriculum()
+
+    course_data = curriculum["courses"]
+    prerequisites = curriculum["prerequisites"]
+    degree_requirements = curriculum["degree_requirements"]
+    course_rules = curriculum["course_rules"]
 
     completed = set(data.completed)
 
-    validate_courses(completed, graph)
-
-    try:
-        plan, expanded_states = a_star_degree_plan(
-            graph=graph,
-            completed=frozenset(completed),
-            course_data=course_data,
-            max_credits=data.max_credits,
-            max_difficulty=data.max_difficulty
-        )
-
-    except ValueError as error:
-        raise HTTPException(
-            status_code=422,
-            detail=str(error)
-        )
-
-    return {
-        "plan": plan,
-        "expanded_states": expanded_states
-    }
-
-
-@app.post("/timetable")
-def timetable(data: TimetableRequest):
-    if not data.courses:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one course must be selected."
-        )
-
-    if len(data.courses) != len(set(data.courses)):
-        raise HTTPException(
-            status_code=400,
-            detail="Duplicate courses are not allowed."
-        )
-
-    section_data = get_section_data()
-
-    validate_courses(data.courses, section_data)
-
-    solution, stats, _ = generate_timetable(section_data, data.courses)
-
-    if solution is None:
-        raise HTTPException(
-            status_code=422,
-            detail="No conflict-free timetable could be generated for the selected courses."
-        )
-
-    return {
-        "timetable": solution,
-        "stats": stats
-    }
-
-
-@app.post("/full-plan")
-def full_plan(data: FullPlanRequest):
-    graph = get_prerequisite_graph()
-    course_data = get_course_data()
-    section_data = get_section_data()
-
-    completed = set(data.completed)
-
-    validate_courses(completed, graph)
-
-    advisor_report = build_advisor_report(
-        graph,
+    validate_courses(
         completed,
         course_data
     )
 
-    try:
-        plan, expanded_states = a_star_degree_plan(
-            graph=graph,
-            completed=frozenset(completed),
+    plan, expanded_states, initial_heuristic = (
+        a_star_degree_plan(
+            prerequisite_groups=prerequisites,
             course_data=course_data,
-            max_credits=data.max_credits,
-            max_difficulty=data.max_difficulty
+            course_rules=course_rules,
+            degree_requirements=degree_requirements,
+            completed=completed,
+            start_semester=data.start_semester,
+            max_credits=data.max_credits
         )
+    )
 
-    except ValueError as error:
+    if plan is None:
         raise HTTPException(
             status_code=422,
-            detail=str(error)
+            detail="No valid degree plan could be generated."
         )
 
-    try:
-        degree_timetables = generate_degree_timetables(
-            plan,
-            section_data
-        )
+    valid, errors = validate_plan(
+        plan=plan,
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=completed,
+        start_semester=data.start_semester,
+        max_credits=data.max_credits
+    )
 
-    except ValueError as error:
+    if not valid:
         raise HTTPException(
-            status_code=422,
-            detail=str(error)
+            status_code=500,
+            detail={
+                "message": "Generated plan failed validation.",
+                "errors": errors
+            }
         )
 
-    degree_plan_details = []
 
-    for semester_number, courses in enumerate(plan, start=1):
-        total_credits = sum(
+    degree_plan = []
+
+    total_planned_credits = 0
+
+    for offset, courses in enumerate(plan):
+
+        semester_number = (
+            data.start_semester + offset
+        )
+
+        semester_credits = sum(
             course_data[course]["credits"]
             for course in courses
         )
 
-        total_difficulty = sum(
-            course_data[course]["difficulty"]
-            for course in courses
-        )
+        total_planned_credits += semester_credits
 
-        degree_plan_details.append({
+        course_details = []
+
+        for course in courses:
+
+            info = course_data[course]
+
+            course_details.append({
+                "code": course,
+                "name": info["name"],
+                "credits": info["credits"],
+                "category": info["category"]
+            })
+
+        degree_plan.append({
             "semester": semester_number,
-            "courses": list(courses),
-            "total_credits": total_credits,
-            "total_difficulty": total_difficulty
+            "courses": course_details,
+            "total_credits": semester_credits
         })
 
+
+    planned_courses = {
+        course
+        for semester in plan
+        for course in semester
+    }
+
+    final_state = completed | planned_courses
+
+    diff_credits = differentiated_credits(
+        final_state,
+        course_data
+    )
+
     return {
-        "advisor": advisor_report,
-        "degree_plan": plan,
-        "degree_plan_details": degree_plan_details,
-        "degree_timetables": degree_timetables,
-        "expanded_states": expanded_states
+        "degree_plan": degree_plan,
+
+        "statistics": {
+            "total_semesters": len(plan),
+            "planned_credits": total_planned_credits,
+            "free_choice_credits_remaining": 12,
+            "differentiated_credits": diff_credits,
+            "expanded_states": expanded_states,
+            "initial_heuristic": initial_heuristic
+        },
+
+        "validation": {
+            "valid": valid,
+            "errors": errors
+        }
     }
