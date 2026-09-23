@@ -1,186 +1,751 @@
 import math
-import heapq
+from heapq import heappush, heappop
+
+from src.ai.graph import (
+    get_eligible_courses,
+    prerequisites_satisfied,
+    course_rules_satisfied
+)
 
 from itertools import combinations, count
-from src.ai.graph import get_eligible_courses
 
 
-def semester_load(action, course_data):
-    total_credits = 0
-    for course in action:
-        total_credits += course_data[course]["credits"]
-    return total_credits
+def completed_category_credits(state, course_data, category):
 
-
-def semester_difficulty(action, course_data):
-    total_difficulty = 0
-
-    for course in action:
-        total_difficulty += course_data[course]["difficulty"]
-
-    return total_difficulty
-
-
-def is_goal(state, graph):
-    return frozenset(graph.keys()).issubset(state)
-
-
-def longest_remaining_chain(state, graph):
-    memo = {}
-
-    def dfs(course):
-        if course in state:
-            return 0
-
-        if course in memo:
-            return memo[course]
-
-        unfinished_prereqs = [
-            prereq
-            for prereq in graph.get(course, [])
-            if prereq not in state
-        ]
-
-        if not unfinished_prereqs:
-            memo[course] = 1
-        else:
-            memo[course] = 1 + max(
-                dfs(prereq)
-                for prereq in unfinished_prereqs
-            )
-
-        return memo[course]
-
-    remaining_courses = [
-        course
-        for course in graph
-        if course not in state
-    ]
-
-    if not remaining_courses:
-        return 0
-
-    return max(
-        dfs(course)
-        for course in remaining_courses
+    return sum(
+        course_data[code]["credits"]
+        for code in state
+        if code in course_data
+        and course_data[code]["category"] == category
     )
 
 
-def heuristic(state, graph, course_data, max_credits):
-    remaining_credits = 0
+def differentiated_credits(state, course_data):
 
-    for course in graph:
-        if course not in state:
-            remaining_credits += course_data[course]["credits"]
-
-    credit_semesters = math.ceil(remaining_credits / max_credits)
-    prerequisite_semesters = longest_remaining_chain(state, graph)
-
-    return max(credit_semesters, prerequisite_semesters)
+    return sum(
+        course_data[code]["credits"]
+        for code in state
+        if code in course_data
+        and course_data[code]["category"]
+        in {"DIFFERENTIATED", "PROFESSIONAL_TRAINING"}
+    )
 
 
-def zero_heuristic(state, graph, course_data, max_credits):
-    return 0
+def required_courses_completed(state, course_data):
+
+    for code, data in course_data.items():
+
+        if data["is_required"] and code not in state:
+            return False
+
+    return True
 
 
-def get_actions(state, graph, course_data, max_credits, max_difficulty):
-    eligible_courses = get_eligible_courses(graph, state)
-    actions = []
+def is_goal(state, course_data, degree_requirements):
+    """
+    Check whether the structured curriculum requirements
+    are completed.
 
-    for size in range(1, len(eligible_courses) + 1):
-        for semester in combinations(eligible_courses, size):
-            total_credits = 0
-            total_difficulty = 0
+    Free-choice courses are not checked here because the
+    curriculum requires 12 free-choice credits but does not
+    define fixed courses for them.
+    """
 
-            for course in semester:
-                total_credits += course_data[course]["credits"]
-                total_difficulty += course_data[course]["difficulty"]
+    # Every individually compulsory course must be completed.
+    if not required_courses_completed(state, course_data):
+        return False
 
-            if (total_credits <= max_credits
-                    and total_difficulty <= max_difficulty):
-                actions.append(semester)
+    for category, requirement in degree_requirements.items():
 
-    return actions
+        required = requirement["required_credits"]
+
+        # No fixed free-choice courses exist in our database.
+        if category == "FREE_CHOICE":
+            continue
+
+        if category == "DIFFERENTIATED":
+            completed = differentiated_credits(
+                state,
+                course_data
+            )
+
+        else:
+            completed = completed_category_credits(
+                state,
+                course_data,
+                category
+            )
+
+        if completed < required:
+            return False
+
+    return True
+
+
+def remaining_planned_credits(state, course_data, degree_requirements):
+    """
+    Estimate how many structured curriculum credits still
+    need to be completed.
+
+    Free-choice credits are excluded because the curriculum
+    does not specify which courses should satisfy them.
+    """
+
+    # Required courses except Professional Training.
+    required_remaining = sum(
+        data["credits"]
+        for code, data in course_data.items()
+        if data["is_required"]
+        and code not in state
+        and data["category"] != "PROFESSIONAL_TRAINING"
+    )
+
+    # Professional Training is mandatory.
+    professional_remaining = sum(
+        data["credits"]
+        for code, data in course_data.items()
+        if data["is_required"]
+        and code not in state
+        and data["category"] == "PROFESSIONAL_TRAINING"
+    )
+
+    # Professional Training also contributes toward the
+    # 30 differentiated credits.
+    diff_required = degree_requirements[
+        "DIFFERENTIATED"
+    ]["required_credits"]
+
+    diff_completed = differentiated_credits(
+        state,
+        course_data
+    )
+
+    diff_remaining = max(
+        0,
+        diff_required - diff_completed
+    )
+
+    # Do NOT count Professional Training twice.
+    remaining_diff_block = max(
+        professional_remaining,
+        diff_remaining
+    )
+
+    return required_remaining + remaining_diff_block
+
+
+def heuristic(state, course_data, degree_requirements, max_credits):
+
+    remaining = remaining_planned_credits(
+        state,
+        course_data,
+        degree_requirements
+    )
+
+    return math.ceil(remaining / max_credits)
+
+
+def course_available_in_semester(course_code, course_data, semester, include_irregular=False):
+    """
+    Check whether a course can be planned in this semester.
+
+    Period 1 -> odd semesters
+    Period 2 -> even semesters
+    Period I -> irregular / occasionally announced
+
+    Thesis and Professional Training cannot be placed before
+    their recommended semester.
+    """
+
+    data = course_data[course_code]
+
+    period = data["period"]
+    recommended = data["recommended_semester"]
+    category = data["category"]
+
+    # Thesis and Professional Training have stronger
+    # semester restrictions.
+    if category in {"THESIS", "PROFESSIONAL_TRAINING"}:
+
+        if (recommended is not None and semester < recommended):
+            return False
+
+    if period == "1":
+        return semester % 2 == 1
+
+    if period == "2":
+        return semester % 2 == 0
+
+    if period == "I":
+
+        # Required irregular course, such as Professional
+        # Training, can be used from its recommended semester.
+        if data["is_required"]:
+
+            if recommended is None:
+                return True
+
+            return semester >= recommended
+
+        # Occasionally announced electives are not selected
+        # automatically unless explicitly enabled.
+        return include_irregular
+
+    return True
+
+
+def get_actions(state, semester, prerequisite_groups, course_data, course_rules, degree_requirements, max_credits=30, include_irregular=False):
+    """
+    Generate possible course combinations for one semester.
+
+    Only courses whose:
+        - prerequisites are satisfied
+        - special rules are satisfied
+        - period matches the semester
+        - credits fit the semester limit
+
+    are considered.
+    """
+
+    eligible = get_eligible_courses(prerequisite_groups, course_data, course_rules, state)
+
+    diff_required = degree_requirements["DIFFERENTIATED"]["required_credits"]
+
+    # Professional Training is mandatory and its 12 credits
+    # are already part of the 30 differentiated credits.
+
+    professional_training_credits = sum(
+        data["credits"]
+        for data in course_data.values()
+        if data["category"] == "PROFESSIONAL_TRAINING"
+        and data["is_required"]
+    )
+
+    optional_diff_target = (
+            diff_required - professional_training_credits
+    )
+
+    optional_diff_completed = completed_category_credits(
+        state,
+        course_data,
+        "DIFFERENTIATED"
+    )
+
+    optional_diff_remaining = max(
+        0,
+        optional_diff_target - optional_diff_completed
+    )
+
+    diff_completed = differentiated_credits(
+        state,
+        course_data
+    )
+
+    need_differentiated = (
+        diff_completed < diff_required
+    )
+
+    candidates = []
+
+    for code in eligible:
+
+        data = course_data[code]
+
+        if not course_available_in_semester(code, course_data, semester, include_irregular):
+            continue
+
+        # Required courses are always relevant.
+        if data["is_required"]:
+            candidates.append(code)
+            continue
+
+        # Optional differentiated courses are relevant only
+        # while differentiated credits are still needed.
+        if (
+            data["category"] == "DIFFERENTIATED"
+            and need_differentiated
+        ):
+            candidates.append(code)
+
+    # Sort so results are deterministic.
+    candidates.sort()
+
+    valid_actions = []
+
+    for size in range(1, len(candidates) + 1):
+
+        for combo in combinations(candidates, size):
+
+            credits = sum(
+                course_data[code]["credits"]
+                for code in combo
+            )
+
+            if credits > max_credits:
+                continue
+
+            # Optional differentiated courses should contribute
+            # only the credits actually needed for the degree.
+            optional_diff_in_action = sum(
+                course_data[code]["credits"]
+                for code in combo
+                if course_data[code]["category"] == "DIFFERENTIATED"
+            )
+
+            if optional_diff_in_action > optional_diff_remaining:
+                continue
+
+            valid_actions.append(combo)
+
+    # If nothing can be taken this semester, allow the
+    # planner to advance to the next semester.
+    if not valid_actions:
+        return [tuple()]
+
+    # --------------------------------------------------------
+    # Remove dominated actions
+    # --------------------------------------------------------
+    #
+    # If another eligible course can still be added without
+    # exceeding max_credits, taking the smaller combination
+    # cannot be better when minimizing semesters.
+    #
+    # So keep only maximal semester loads.
+    # --------------------------------------------------------
+
+    maximal_actions = []
+
+    for action in valid_actions:
+
+        action_set = set(action)
+
+        used_credits = sum(
+            course_data[code]["credits"]
+            for code in action
+        )
+
+        can_add_more = False
+
+        for code in candidates:
+
+            if code in action_set:
+                continue
+
+            if (
+                used_credits
+                + course_data[code]["credits"]
+                <= max_credits
+            ):
+                can_add_more = True
+                break
+
+        if not can_add_more:
+            maximal_actions.append(action)
+
+    # Prefer required courses and recommended-semester courses
+    # when A* has several equivalent choices.
+    def action_priority(action):
+
+        required_count = sum(
+            course_data[code]["is_required"]
+            for code in action
+        )
+
+        recommended_count = sum(
+            course_data[code]["recommended_semester"]
+            == semester
+            for code in action
+        )
+
+        credits = sum(
+            course_data[code]["credits"]
+            for code in action
+        )
+
+        return (
+            required_count,
+            recommended_count,
+            credits
+        )
+
+    maximal_actions.sort(
+        key=action_priority,
+        reverse=True
+    )
+
+    return maximal_actions
 
 
 def transition(state, action):
-    return state | frozenset(action)
 
+    return frozenset(
+        set(state).union(action)
+    )
 
-def a_star_degree_plan(graph, completed, course_data, max_credits, max_difficulty, heuristic_fn=heuristic):
-    if not completed:
+def action_recommendation_penalty(action, semester, course_data):
+    """
+    Used only as an A* tie-breaker.
+
+    Plans closer to the curriculum's recommended semesters
+    are explored first.
+    """
+
+    penalty = 0
+
+    for code in action:
+
+        recommended = course_data[code]["recommended_semester"]
+
+        if recommended is not None:
+            penalty += abs(semester - recommended)
+
+    return penalty
+
+def a_star_degree_plan(prerequisite_groups, course_data, course_rules, degree_requirements, completed=None, start_semester=1, max_credits=30, include_irregular=False, max_semesters=10):
+    """
+    Generate a degree plan using A* search.
+
+    State:
+        frozenset of completed course codes
+
+    Action:
+        tuple of courses taken during one semester
+
+    Cost:
+        number of semesters
+
+    Goal:
+        all required curriculum requirements are satisfied
+    """
+
+    if completed is None:
         completed = set()
 
     start_state = frozenset(completed)
-    frontier = []
+
+    initial_h = heuristic(start_state, course_data, degree_requirements, max_credits)
+
     tie_breaker = count()
 
-    start_heuristic = heuristic_fn(start_state, graph, course_data, max_credits)
-    heapq.heappush(
-        frontier,
-        (
-            start_heuristic,
-            0,
-            0,
-            0,
-            next(tie_breaker),
-            start_state,
-            []
-        )
-    )
-    best_cost = {
-        start_state: (0, 0)
-    }
+    # frontier item:
+    #
+    # (
+    #     f,
+    #     -g,
+    #     recommendation_penalty,
+    #     tie,
+    #     semester,
+    #     state,
+    #     path
+    # )
+
+    frontier = []
+
+    heappush(frontier,(initial_h, 0, 0, next(tie_breaker), start_semester, start_state, []))
+
+    visited = set()
 
     expanded_states = 0
-    best_goal_path = None
-    best_goal_g = None
-    best_goal_balance = None
 
     while frontier:
 
-        f, g, balance, _, _, state, path = heapq.heappop(frontier)
+        (
+            f,
+            negative_g,
+            penalty,
+            _,
+            semester,
+            state,
+            path
+        ) = heappop(frontier)
 
-        if (g, balance) != best_cost.get(state):
+        g = -negative_g
+
+        state_key = (
+            state,
+            semester
+        )
+
+        if state_key in visited:
+            continue
+
+        visited.add(state_key)
+
+        # ----------------------------------------
+        # Goal test
+        # ----------------------------------------
+
+        if is_goal(state, course_data, degree_requirements):
+            return (path, expanded_states, initial_h)
+
+        # Prevent endless waiting/searching
+        if g >= max_semesters:
             continue
 
         expanded_states += 1
 
-        if best_goal_g is not None and f > best_goal_g:
-            break
+        # ----------------------------------------
+        # Generate semester actions
+        # ----------------------------------------
 
-        if is_goal(state, graph):
-
-            if (best_goal_path is None or
-                    (g, balance) < (best_goal_g, best_goal_balance)):
-                best_goal_path = path
-                best_goal_g = g
-                best_goal_balance = balance
-
-            continue
-
-        actions = get_actions(state, graph, course_data, max_credits, max_difficulty)
+        actions = get_actions(
+            state=state,
+            semester=semester,
+            prerequisite_groups=prerequisite_groups,
+            course_data=course_data,
+            course_rules=course_rules,
+            degree_requirements=degree_requirements,
+            max_credits=max_credits,
+            include_irregular=include_irregular
+        )
 
         for action in actions:
-            new_state = transition(state, action)
-            semester_penalty = semester_difficulty(action, course_data) ** 2
-            new_balance_cost = balance + semester_penalty
+
+            next_state = transition(state, action)
+
+            next_semester = semester + 1
             new_g = g + 1
-            new_cost = (new_g, new_balance_cost)
-            if new_state not in best_cost or new_cost < best_cost[new_state]:
-                best_cost[new_state] = new_cost
 
-                new_h = heuristic_fn(new_state, graph, course_data, max_credits)
-                new_f = new_h + new_g
+            h = heuristic(next_state, course_data, degree_requirements, max_credits)
 
-                new_path = path + [action]
-                heapq.heappush(frontier,
-                               (new_f, new_g, new_balance_cost, -semester_load(action, course_data), next(tie_breaker),
-                                new_state, new_path))
+            new_f = new_g + h
 
-    if best_goal_path is not None:
-        return best_goal_path, expanded_states
+            new_penalty = (penalty + action_recommendation_penalty(action, semester, course_data))
 
-    raise ValueError(
-        "No valid degree plan could be found."
+            new_path = path + [action]
+
+            heappush(
+                frontier,
+                (
+                    new_f,
+
+                    # When f is equal, explore deeper
+                    # states first. This prevents A*
+                    # from behaving like breadth-first
+                    # search across hundreds of equal
+                    # solutions.
+                    -new_g,
+
+                    new_penalty,
+
+                    next(tie_breaker),
+
+                    next_semester,
+                    next_state,
+                    new_path
+                )
+            )
+
+    return (None, expanded_states, initial_h)
+
+
+def validate_plan(
+    plan,
+    prerequisite_groups,
+    course_data,
+    course_rules,
+    degree_requirements,
+    completed=None,
+    start_semester=1,
+    max_credits=30
+):
+    """
+    Validate a generated degree plan.
+
+    Checks:
+    - credit limit
+    - no repeated courses
+    - semester availability
+    - prerequisites
+    - special course rules
+    - final degree requirements
+    """
+
+    if completed is None:
+        completed = set()
+
+    current_completed = set(completed)
+    errors = []
+
+    for offset, action in enumerate(plan):
+
+        semester = start_semester + offset
+
+        # ----------------------------------------
+        # Semester credit limit
+        # ----------------------------------------
+
+        semester_credits = sum(
+            course_data[code]["credits"]
+            for code in action
+        )
+
+        if semester_credits > max_credits:
+            errors.append(
+                f"Semester {semester}: "
+                f"{semester_credits} credits exceeds "
+                f"the {max_credits}-credit limit."
+            )
+
+        # ----------------------------------------
+        # Validate each course
+        # ----------------------------------------
+
+        for code in action:
+
+            if code in current_completed:
+                errors.append(
+                    f"Semester {semester}: "
+                    f"{code} was already completed."
+                )
+
+            if not course_available_in_semester(
+                code,
+                course_data,
+                semester
+            ):
+                errors.append(
+                    f"Semester {semester}: "
+                    f"{code} is not available."
+                )
+
+            if not prerequisites_satisfied(
+                code,
+                prerequisite_groups,
+                current_completed
+            ):
+                errors.append(
+                    f"Semester {semester}: "
+                    f"prerequisites not satisfied for {code}."
+                )
+
+            if not course_rules_satisfied(
+                code,
+                course_data,
+                course_rules,
+                current_completed
+            ):
+                errors.append(
+                    f"Semester {semester}: "
+                    f"special rules not satisfied for {code}."
+                )
+
+        # Courses from the semester become completed
+        # only AFTER the semester.
+        current_completed.update(action)
+
+    # ----------------------------------------
+    # Final degree goal
+    # ----------------------------------------
+
+    if not is_goal(
+        frozenset(current_completed),
+        course_data,
+        degree_requirements
+    ):
+        errors.append(
+            "Final plan does not satisfy degree requirements."
+        )
+
+    return len(errors) == 0, errors
+
+
+if __name__ == "__main__":
+
+    from src.db import load_curriculum
+
+    curriculum = load_curriculum()
+
+    course_data = curriculum["courses"]
+    prerequisites = curriculum["prerequisites"]
+    degree_requirements = curriculum["degree_requirements"]
+    course_rules = curriculum["course_rules"]
+
+    plan, expanded_states, initial_h = a_star_degree_plan(
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=set(),
+        start_semester=1,
+        max_credits=30
     )
+
+    print("\nInitial heuristic:", initial_h)
+
+    if plan is None:
+
+        print("No valid degree plan found.")
+
+    else:
+
+        print("\nDEGREE PLAN")
+        print("=" * 60)
+
+        total_planned_credits = 0
+
+        for semester, action in enumerate(
+            plan,
+            start=1
+        ):
+
+            semester_credits = sum(
+                course_data[code]["credits"]
+                for code in action
+            )
+
+            total_planned_credits += semester_credits
+
+            print(
+                f"\nSemester {semester} "
+                f"({semester_credits} credits)"
+            )
+
+            if not action:
+                print("  No courses")
+
+            for code in action:
+
+                print(
+                    f"  {code:<14} "
+                    f"{course_data[code]['name']} "
+                    f"({course_data[code]['credits']} credits)"
+                )
+
+        print("\n" + "=" * 60)
+
+        print(
+            "Total semesters:",
+            len(plan)
+        )
+
+        print(
+            "Structured credits planned:",
+            total_planned_credits
+        )
+
+        print(
+            "Free-choice credits still required: 12"
+        )
+
+        print(
+            "Expanded states:",
+            expanded_states
+        )
+
+        valid, errors = validate_plan(
+            plan=plan,
+            prerequisite_groups=prerequisites,
+            course_data=course_data,
+            course_rules=course_rules,
+            degree_requirements=degree_requirements,
+            max_credits=30
+        )
+
+        print("\nPlan valid:", valid)
+
+        if errors:
+            print("\nValidation errors:")
+
+            for error in errors:
+                print("-", error)
