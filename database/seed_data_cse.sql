@@ -12,10 +12,10 @@ INSERT INTO degree_requirements
 (category, required_credits, counts_toward_degree)
 VALUES
 ('NATURAL_SCIENCE',        45, TRUE),
-('HUMAN_ECONOMIC',         15, TRUE),
+('HUMAN_ECONOMIC',         15, TRUE),python -m pytest -q
 ('COMPULSORY',             93, TRUE),
 ('DIFFERENTIATED',         30, TRUE),
-('PROFESSIONAL_TRAINING',  12, TRUE),
+('PROFESSIONAL_TRAINING',  12, FALSE),
 ('THESIS',                 15, TRUE),
 ('FREE_CHOICE',            12, TRUE);
 
