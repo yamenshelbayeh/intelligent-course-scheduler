@@ -194,7 +194,7 @@ def course_available_in_semester(course_code, course_data, semester, include_irr
     return True
 
 
-def get_actions(state, semester, prerequisite_groups, course_data, course_rules, degree_requirements, max_credits=30, include_irregular=False):
+def get_actions(state, semester, prerequisite_groups, course_data, course_rules, degree_requirements, max_credits=30, include_irregular=False, unavailable_by_semester= None):
     """
     Generate possible course combinations for one semester.
 
@@ -206,6 +206,11 @@ def get_actions(state, semester, prerequisite_groups, course_data, course_rules,
 
     are considered.
     """
+
+    if unavailable_by_semester == None:
+        unavailable_by_semester = {}
+
+    unavailable_now = unavailable_by_semester.get(semester, set())
 
     eligible = get_eligible_courses(prerequisite_groups, course_data, course_rules, state)
 
@@ -251,8 +256,14 @@ def get_actions(state, semester, prerequisite_groups, course_data, course_rules,
 
         data = course_data[code]
 
+        # What-if constraint:
+        # skip courses unavailable this semester.
+        if code in unavailable_now:
+            continue
+
         if not course_available_in_semester(code, course_data, semester, include_irregular):
             continue
+
 
         # Required courses are always relevant.
         if data["is_required"]:
@@ -401,7 +412,7 @@ def action_recommendation_penalty(action, semester, course_data):
 
     return penalty
 
-def a_star_degree_plan(prerequisite_groups, course_data, course_rules, degree_requirements, completed=None, start_semester=1, max_credits=30, include_irregular=False, max_semesters=10):
+def a_star_degree_plan(prerequisite_groups, course_data, course_rules, degree_requirements, completed=None, start_semester=1, max_credits=30, include_irregular=False, max_semesters=10, unavailable_by_semester=None):
     """
     Generate a degree plan using A* search.
 
@@ -421,23 +432,14 @@ def a_star_degree_plan(prerequisite_groups, course_data, course_rules, degree_re
     if completed is None:
         completed = set()
 
+    if unavailable_by_semester is None:
+        unavailable_by_semester = {}
+
     start_state = frozenset(completed)
 
     initial_h = heuristic(start_state, course_data, degree_requirements, max_credits)
 
     tie_breaker = count()
-
-    # frontier item:
-    #
-    # (
-    #     f,
-    #     -g,
-    #     recommendation_penalty,
-    #     tie,
-    #     semester,
-    #     state,
-    #     path
-    # )
 
     frontier = []
 
@@ -496,7 +498,8 @@ def a_star_degree_plan(prerequisite_groups, course_data, course_rules, degree_re
             course_rules=course_rules,
             degree_requirements=degree_requirements,
             max_credits=max_credits,
-            include_irregular=include_irregular
+            include_irregular=include_irregular,
+            unavailable_by_semester = unavailable_by_semester
         )
 
         for action in actions:
@@ -547,7 +550,8 @@ def validate_plan(
     degree_requirements,
     completed=None,
     start_semester=1,
-    max_credits=30
+    max_credits=30,
+    unavailable_by_semester=None
 ):
     """
     Validate a generated degree plan.
@@ -559,10 +563,14 @@ def validate_plan(
     - prerequisites
     - special course rules
     - final degree requirements
+    - If the subject is not available by semester
     """
 
     if completed is None:
         completed = set()
+
+    if unavailable_by_semester is None:
+        unavailable_by_semester = {}
 
     current_completed = set(completed)
     errors = []
@@ -597,6 +605,15 @@ def validate_plan(
                 errors.append(
                     f"Semester {semester}: "
                     f"{code} was already completed."
+                )
+
+            if code in unavailable_by_semester.get(
+                    semester,
+                    set()
+            ):
+                errors.append(
+                    f"Semester {semester}: "
+                    f"{code} was marked unavailable."
                 )
 
             if not course_available_in_semester(
@@ -661,6 +678,10 @@ if __name__ == "__main__":
     degree_requirements = curriculum["degree_requirements"]
     course_rules = curriculum["course_rules"]
 
+    scenario = {
+        1: {"INBMA0101-24"}
+    }
+
     plan, expanded_states, initial_h = a_star_degree_plan(
         prerequisite_groups=prerequisites,
         course_data=course_data,
@@ -668,84 +689,27 @@ if __name__ == "__main__":
         degree_requirements=degree_requirements,
         completed=set(),
         start_semester=1,
-        max_credits=30
+        max_credits=30,
+        unavailable_by_semester=scenario
     )
 
-    print("\nInitial heuristic:", initial_h)
+    print("Semesters:", len(plan))
+    print("Expanded states:", expanded_states)
 
-    if plan is None:
+    for semester, action in enumerate(plan, start=1):
+        print(semester, action)
 
-        print("No valid degree plan found.")
+    valid, errors = validate_plan(
+        plan=plan,
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=set(),
+        start_semester=1,
+        max_credits=30,
+        unavailable_by_semester=scenario
+    )
 
-    else:
-
-        print("\nDEGREE PLAN")
-        print("=" * 60)
-
-        total_planned_credits = 0
-
-        for semester, action in enumerate(
-            plan,
-            start=1
-        ):
-
-            semester_credits = sum(
-                course_data[code]["credits"]
-                for code in action
-            )
-
-            total_planned_credits += semester_credits
-
-            print(
-                f"\nSemester {semester} "
-                f"({semester_credits} credits)"
-            )
-
-            if not action:
-                print("  No courses")
-
-            for code in action:
-
-                print(
-                    f"  {code:<14} "
-                    f"{course_data[code]['name']} "
-                    f"({course_data[code]['credits']} credits)"
-                )
-
-        print("\n" + "=" * 60)
-
-        print(
-            "Total semesters:",
-            len(plan)
-        )
-
-        print(
-            "Structured credits planned:",
-            total_planned_credits
-        )
-
-        print(
-            "Free-choice credits still required: 12"
-        )
-
-        print(
-            "Expanded states:",
-            expanded_states
-        )
-
-        valid, errors = validate_plan(
-            plan=plan,
-            prerequisite_groups=prerequisites,
-            course_data=course_data,
-            course_rules=course_rules,
-            degree_requirements=degree_requirements,
-            max_credits=30
-        )
-
-        print("\nPlan valid:", valid)
-
-        if errors:
-            print("\nValidation errors:")
-
-            for error in errors:
-                print("-", error)
+    print("Valid:", valid)
+    print("Errors:", errors)
