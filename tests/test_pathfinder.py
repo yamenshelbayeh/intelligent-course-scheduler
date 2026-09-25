@@ -454,3 +454,139 @@ def test_generated_plan_is_valid(
         "Generated plan failed validation:\n"
         + "\n".join(errors)
     )
+
+# ============================================================
+# WHAT-IF
+# ============================================================
+
+def test_what_if_course_unavailable_in_semester(
+    prerequisites,
+    course_data,
+    course_rules,
+    degree_requirements
+):
+    scenario = {
+        1: {"INBMA0101-24"}
+    }
+
+    plan, _, _ = a_star_degree_plan(
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=set(),
+        start_semester=1,
+        max_credits=30,
+        unavailable_by_semester=scenario
+    )
+
+    assert plan is not None
+
+    # Algorithms must not appear in Semester 1.
+    assert "INBMA0101-24" not in plan[0]
+
+
+def test_what_if_course_can_appear_later(
+    prerequisites,
+    course_data,
+    course_rules,
+    degree_requirements
+):
+    scenario = {
+        1: {"INBMA0101-24"}
+    }
+
+    plan, _, _ = a_star_degree_plan(
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=set(),
+        start_semester=1,
+        max_credits=30,
+        unavailable_by_semester=scenario
+    )
+
+    later_courses = {
+        code
+        for semester in plan[1:]
+        for code in semester
+    }
+
+    # Temporary unavailability must not remove
+    # the course permanently.
+    assert "INBMA0101-24" in later_courses
+
+
+def test_what_if_generated_plan_is_valid(
+    prerequisites,
+    course_data,
+    course_rules,
+    degree_requirements
+):
+    scenario = {
+        1: {"INBMA0101-24"}
+    }
+
+    plan, _, _ = a_star_degree_plan(
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=set(),
+        start_semester=1,
+        max_credits=30,
+        unavailable_by_semester=scenario
+    )
+
+    valid, errors = validate_plan(
+        plan=plan,
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=set(),
+        start_semester=1,
+        max_credits=30,
+        unavailable_by_semester=scenario
+    )
+
+    assert valid, "\n".join(errors)
+
+
+def test_validator_detects_what_if_violation(
+    prerequisites,
+    course_data,
+    course_rules,
+    degree_requirements
+):
+    # Artificial bad plan:
+    # Algorithms is placed in Semester 1
+    # even though we mark it unavailable.
+    bad_plan = [
+        ("INBMA0101-24",)
+    ]
+
+    scenario = {
+        1: {"INBMA0101-24"}
+    }
+
+    valid, errors = validate_plan(
+        plan=bad_plan,
+        prerequisite_groups=prerequisites,
+        course_data=course_data,
+        course_rules=course_rules,
+        degree_requirements=degree_requirements,
+        completed=set(),
+        start_semester=1,
+        max_credits=30,
+        unavailable_by_semester=scenario
+    )
+
+    assert not valid
+
+    assert any(
+        "INBMA0101-24 was marked unavailable"
+        in error
+        for error in errors
+    )

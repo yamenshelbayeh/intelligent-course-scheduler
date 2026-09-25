@@ -194,6 +194,17 @@ def completed_credit_total(completed):
         if code in course_data
     )
 
+def get_course_semesters(plan, start_semester):
+    result = {}
+
+    for offset, semester_courses in enumerate(plan):
+        semester = start_semester + offset
+
+        for code in semester_courses:
+            result[code] = semester
+
+    return result
+
 
 course_codes = sorted(
     course_data,
@@ -204,6 +215,8 @@ course_codes = sorted(
         code
     )
 )
+
+
 
 
 st.markdown(
@@ -267,14 +280,37 @@ with input_col2:
         )
     )
 
+# ============================================================
+# WHAT-IF SCENARIO
+# ============================================================
+
+what_if_options = [
+    code
+    for code in course_codes
+    if code not in completed
+    and course_available_in_semester(
+        code,
+        course_data,
+        start_semester
+    )
+]
+
+unavailable_courses = st.multiselect(
+    "Courses unavailable next semester",
+    options=what_if_options,
+    format_func=course_label,
+    help=(
+        "Optional what-if scenario. Selected courses will be "
+        "treated as unavailable only in the next semester. "
+        "The AI will replan the remaining degree around them."
+    )
+)
 
 generate = st.button(
     "Generate AI Degree Plan",
     type="primary",
     use_container_width=True
 )
-
-
 # ============================================================
 # GENERATE PLAN
 # ============================================================
@@ -282,6 +318,34 @@ generate = st.button(
 if generate:
 
     completed_snapshot = list(completed)
+
+    unavailable_snapshot = list(unavailable_courses)
+
+    if unavailable_snapshot:
+        unavailable_by_semester = {
+            start_semester: set(unavailable_snapshot)
+        }
+    else:
+        unavailable_by_semester = {}
+
+    baseline_plan = None
+    baseline_expanded_states = None
+
+    if unavailable_snapshot:
+        baseline_plan, baseline_expanded_states, _ = (
+            a_star_degree_plan(
+                prerequisite_groups=prerequisites,
+                course_data=course_data,
+                course_rules=course_rules,
+                degree_requirements=degree_requirements,
+                completed=set(completed_snapshot),
+                start_semester=start_semester,
+                max_credits=max_credits,
+                unavailable_by_semester={}
+            )
+        )
+
+
 
     with st.spinner(
         "Searching for a valid degree pathway..."
@@ -295,7 +359,8 @@ if generate:
                 degree_requirements=degree_requirements,
                 completed=set(completed_snapshot),
                 start_semester=start_semester,
-                max_credits=max_credits
+                max_credits=max_credits,
+                unavailable_by_semester=unavailable_by_semester
             )
         )
 
@@ -309,6 +374,77 @@ if generate:
 
             st.stop()
 
+        scenario_changes = []
+        baseline_planned_credits = None
+
+        if baseline_plan is not None:
+
+            baseline_semesters = get_course_semesters(
+                baseline_plan,
+                start_semester
+            )
+
+            scenario_semesters = get_course_semesters(
+                plan,
+                start_semester
+            )
+
+            all_courses = (
+                    set(baseline_semesters)
+                    | set(scenario_semesters)
+            )
+
+            for code in sorted(all_courses):
+
+                original_semester = baseline_semesters.get(code)
+                new_semester = scenario_semesters.get(code)
+
+                if original_semester == new_semester:
+                    continue
+
+                if original_semester is None:
+                    change = "Added to scenario plan"
+
+                elif new_semester is None:
+                    change = "Removed from scenario plan"
+
+                else:
+                    shift = new_semester - original_semester
+
+                    if shift > 0:
+                        change = f"Delayed by {shift} semester(s)"
+                    else:
+                        change = (
+                            f"Moved {abs(shift)} semester(s) earlier"
+                        )
+
+                scenario_changes.append({
+                    "Code": code,
+                    "Course": course_data[code]["name"],
+                    "Original": (
+                        original_semester
+                        if original_semester is not None
+                        else "—"
+                    ),
+                    "What-If": (
+                        new_semester
+                        if new_semester is not None
+                        else "—"
+                    ),
+                    "Change": change
+                })
+
+            baseline_courses = {
+                code
+                for semester in baseline_plan
+                for code in semester
+            }
+
+            baseline_planned_credits = sum(
+                course_data[code]["credits"]
+                for code in baseline_courses
+            )
+
 
         valid, validation_errors = validate_plan(
             plan=plan,
@@ -318,7 +454,8 @@ if generate:
             degree_requirements=degree_requirements,
             completed=set(completed_snapshot),
             start_semester=start_semester,
-            max_credits=max_credits
+            max_credits=max_credits,
+            unavailable_by_semester=unavailable_by_semester
         )
 
 
@@ -356,7 +493,6 @@ if generate:
             )
         )
 
-
         current_recommendations = [
             recommendation
             for recommendation
@@ -366,6 +502,11 @@ if generate:
                 course_data,
                 start_semester
             )
+               and recommendation["course"]
+               not in unavailable_by_semester.get(
+                start_semester,
+                set()
+            )
         ]
 
 
@@ -373,6 +514,10 @@ if generate:
             "plan": plan,
             "expanded_states": expanded_states,
             "initial_h": initial_h,
+            "baseline_plan": baseline_plan,
+            "baseline_expanded_states": baseline_expanded_states,
+            "baseline_planned_credits": baseline_planned_credits,
+            "scenario_changes": scenario_changes,
             "valid": valid,
             "validation_errors": validation_errors,
             "advisor": advisor,
@@ -387,7 +532,9 @@ if generate:
             "final_differentiated_credits":
                 final_differentiated_credits,
             "start_semester": start_semester,
-            "max_credits": max_credits
+            "max_credits": max_credits,
+            "unavailable_courses": unavailable_snapshot,
+            "unavailable_by_semester": unavailable_by_semester
         }
 
 
@@ -411,12 +558,87 @@ if "planner_result" in st.session_state:
 
     generated_completed = result["completed"]
 
+    generated_unavailable = result["unavailable_courses"]
 
     st.success(
         "Valid degree plan generated successfully."
     )
 
+    if generated_unavailable:
 
+        st.warning(
+            f"⚠️ What-if scenario active: "
+            f"{len(generated_unavailable)} course(s) "
+            f"were treated as unavailable in "
+            f"Semester {start_semester}."
+        )
+
+        with st.expander(
+                "View scenario constraints"
+        ):
+
+
+            for code in generated_unavailable:
+                st.write(
+                    f"• {course_label(code)}"
+                )
+
+        if (
+                generated_unavailable
+                and result["baseline_plan"] is not None
+        ):
+
+            st.subheader("🔄 Scenario Impact")
+
+            baseline_plan = result["baseline_plan"]
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric(
+                "Remaining Semesters",
+                len(plan),
+                delta=len(plan) - len(baseline_plan),
+                delta_color="inverse"
+            )
+
+            col2.metric(
+                "Credits Planned",
+                result["planned_credits"],
+                delta=(
+                        result["planned_credits"]
+                        - result["baseline_planned_credits"]
+                )
+            )
+
+            col3.metric(
+                "A* Expanded States",
+                result["expanded_states"],
+                delta=(
+                        result["expanded_states"]
+                        - result["baseline_expanded_states"]
+                ),
+                delta_color="off"
+            )
+
+            st.caption(
+                "Baseline and What-If plans use the same completed courses, "
+                "starting semester and credit cap. Only the temporary "
+                "availability constraint changes. Differences may include "
+                "semester shifts and alternative elective selections."
+            )
+
+            if result["scenario_changes"]:
+                st.markdown(
+                    "#### Courses affected by the scenario"
+                )
+
+                st.dataframe(
+                    result["scenario_changes"],
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            st.divider()
     # ========================================================
     # MAIN METRICS
     # ========================================================
